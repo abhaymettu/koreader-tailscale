@@ -71,7 +71,13 @@ function TailscalePlugin:init()
         self.ts_dir = self.plugin_dir
     end
     self.ts_arch = self:detectArch()
-    self.ts_bin = self.ts_dir .. "/bin"
+    self:detectExistingInstall()
+    if self.existing_install then
+        self.ts_bin = self.existing_install.bin_dir
+        logger.info("Tailscale: using existing install at " .. self.ts_bin)
+    else
+        self.ts_bin = self.ts_dir .. "/bin"
+    end
     logger.info("Tailscale: dir=" .. self.ts_dir .. " arch=" .. self.ts_arch)
 
     self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/tailscale.lua")
@@ -254,7 +260,58 @@ end
 
 -- ─── state directory resolution (formerly shell logic) ────────────
 
+local function fileExists(p)
+    local f = io.open(p, "r")
+    if f then f:close() return true end
+    return false
+end
+
+-- Some devices already run tailscaled from a manual jail install. Adopting a
+-- RECOGNIZED install keeps the device's existing tailnet identity; letting the
+-- plugin install its own copy alongside would register a SECOND node and force
+-- re-authentication. A partial or unrecognized install is not touched and not
+-- complemented: the plugin refuses to manage anything until it is removed,
+-- because either choice could strand the existing setup.
+function TailscalePlugin:detectExistingInstall(paths)
+    paths = paths or {}
+    local bin_dir = paths.bin_dir or "/mnt/us/ts-bin"
+    local state_dir = paths.state_dir or "/mnt/us/tailscale/state"
+    local job = paths.job or "/etc/upstart/tailscaled.conf"
+    local has_bin = fileExists(bin_dir .. "/tailscaled") and fileExists(bin_dir .. "/tailscale")
+    local has_state = fileExists(state_dir .. "/tailscaled.state")
+    local has_job = fileExists(job)
+    if has_bin and has_state and has_job then
+        self.existing_install = { bin_dir = bin_dir, state_dir = state_dir }
+    elseif has_bin or has_state or has_job then
+        self.unsupported_install = true
+        logger.warn("Tailscale: partial manual install detected; leaving it alone")
+    else
+        -- No file markers. A tailscaled running from paths we do not
+        -- recognize still means an external install exists; leave it alone.
+        local h = io.popen("pidof tailscaled 2>/dev/null")
+        local pid = h and h:read("*l")
+        if h then h:close() end
+        if pid and pid ~= "" then
+            local c = io.open("/proc/" .. pid .. "/cmdline", "rb")
+            local cmd = c and c:read("*a") or ""
+            if c then c:close() end
+            local plugin_bin = (self.plugin_dir or "") .. "/bin/tailscaled"
+            if not cmd:find(plugin_bin, 1, true) then
+                self.unsupported_install = true
+                logger.warn("Tailscale: unrecognized tailscaled running (" .. pid .. "); leaving it alone")
+            end
+        end
+    end
+end
+
 function TailscalePlugin:resolveStateDir()
+    if self.existing_install then
+        return self.existing_install.state_dir
+    end
+    return self:resolveStockStateDir()
+end
+
+function TailscalePlugin:resolveStockStateDir()
     -- Test if bin dir supports chmod; if so, use it directly.
     -- Otherwise, fall back to /tmp/tailscale (tmpfs).
     local test_file = self.ts_bin .. "/.chmod_test"
@@ -398,6 +455,7 @@ end
 function TailscalePlugin:getStartEnvironment(state_dir)
     -- All decisions are made here in Lua and passed to the shell via env vars.
     local env = "TS_BIN=" .. self:shellQuote(self.ts_bin)
+        .. (self.existing_install and " TS_EXISTING_UPSTART=1" or "")
         .. " TS_STATEDIR=" .. self:shellQuote(state_dir)
         .. " TS_TUN_FLAG=" .. self:shellQuote(self._tun_flag or "")
         .. " TS_NETWORK_MODE=" .. self:shellQuote(self._network_mode or "unknown")
@@ -423,6 +481,13 @@ end
 -- instead of having one forced on it. That is the launch path; the connect path
 -- passes nothing and gets a full `up`.
 function TailscalePlugin:execStartScript(opts)
+    if self.unsupported_install then
+        local InfoMessage = require("ui/widget/infomessage")
+        UIManager:show(InfoMessage:new{
+            text = _("A partial Tailscale install was found outside KOReader. This plugin will not touch it or add a second copy. Remove or complete that install first."),
+        })
+        return
+    end
     -- Shell script is a dumb executor — all decisions are already made.
     local state_dir = self:resolveStateDir()
     self:ensureLoopback()
@@ -938,6 +1003,13 @@ end
 -- ─── install ──────────────────────────────────────────────────────
 
 function TailscalePlugin:installTailscale()
+    if self.unsupported_install then
+        local InfoMessage = require("ui/widget/infomessage")
+        UIManager:show(InfoMessage:new{
+            text = _("A partial Tailscale install was found outside KOReader. This plugin will not touch it or add a second copy. Remove or complete that install first."),
+        })
+        return
+    end
     if self:binariesExist() then
         UIManager:show(InfoMessage:new{
             text = _("Tailscale already installed.\nWould you like to check for updates?\nThis will download 57MB if update needed."),

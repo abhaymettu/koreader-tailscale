@@ -4,6 +4,15 @@
 BIN_DIR="${TS_BIN:-$(cd "$(dirname "$0")" && pwd)}"
 cd "$BIN_DIR" 2>/dev/null || exit 0
 
+# Existing-install mode: mark the node down, then stop the upstart job.
+# Stopping the job (not killall) is what suppresses the respawner.
+if [ "${TS_EXISTING_UPSTART:-0}" = "1" ]; then
+    "$BIN_DIR/tailscale" down >/dev/null 2>&1 || true
+    stop tailscaled 2>/dev/null || true
+    exit 0
+fi
+
+
 ./tailscale down >/dev/null 2>&1 || true
 ./tailscaled -cleanup >/dev/null 2>&1 || true
 killall tailscaled 2>/dev/null || true

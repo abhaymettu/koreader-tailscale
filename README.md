@@ -1,8 +1,29 @@
-# Tailscale Plugin for KOReader
+## Using an existing tailscaled install
 
-Run [Tailscale](https://tailscale.com) on your e-reader from inside KOReader:
-the device joins your tailnet and gets a Tailscale IP for OPDS, progress sync,
-and file sync over the tailnet. Requires an ARMv7 or ARM64 device.
+This fork adds one behavior on top of upstream: if the plugin finds a manual
+Tailscale install it recognizes - binaries in `/mnt/us/ts-bin`, state in
+`/mnt/us/tailscale/state`, and an upstart job at `/etc/upstart/tailscaled.conf`
+- it adopts that install instead of installing its own copy. The device keeps
+its existing tailnet identity; nothing is re-registered and there is no new
+login. Menu start/stop then drives the upstart job, so the service manager's
+respawn behavior keeps working.
+
+If it finds only PART of a manual install (some of those files but not all),
+it does nothing and tells you: it will not install a second copy next to an
+unrecognized setup, to avoid creating a second node on your tailnet. Remove
+or complete the manual install first. The same refusal applies if a
+tailscaled daemon is already running from paths the plugin does not
+recognize.
+
+If it finds no manual install, it falls back to the upstream behavior:
+installing and managing its own binaries and state.
+
+Tested on one Kindle (11th gen, 2022): detection of the recognized layout,
+the partial-install fail-safe, and the no-install fallback (on-device detection
+checks), plus plugin load and identity preservation across restarts. The
+menu start/stop buttons are logic-reviewed and syntax-checked but not
+exercised end-to-end from the UI in this fork.
+
 
 ## Installation
 

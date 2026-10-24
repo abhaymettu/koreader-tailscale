@@ -9,6 +9,17 @@ NETWORK_MODE="${TS_NETWORK_MODE:-unknown}"
 
 cd "$BIN_DIR" || exit 1
 
+# Existing-install mode: the device's own upstart job owns the daemon.
+# initctl start is a no-op when already running; `tailscale up` with no new
+# flags just restores WantRunning with the node's saved prefs (no re-auth).
+if [ "${TS_EXISTING_UPSTART:-0}" = "1" ]; then
+    start tailscaled 2>/dev/null || true
+    sleep 1
+    "$BIN_DIR/tailscale" up ${TS_UP_FLAGS:-} >/dev/null 2>&1 || true
+    exit 0
+fi
+
+
 # Ensure binaries exist
 [ -f ./tailscaled ] || exit 1
 [ -f ./tailscale ] || exit 1
